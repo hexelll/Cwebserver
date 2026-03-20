@@ -51,6 +51,10 @@ struct Server ServerInit(int domain,int service,int protocol,u_long interface,in
     return server;
 }
 
+struct Server ServerDefaultInit(int port,int backlog){
+    return ServerInit(AF_INET,SOCK_STREAM,0,INADDR_ANY,port,backlog);
+}
+
 String ServerMakeHeader(int code,String* headers,int headerCount,struct Arena* arena) {
     String header = StringFormat(arena,StringFrom("HTTP/1.1 %d OK\n",arena),code);
     if (headers) {
@@ -107,10 +111,6 @@ int ServerPathDepth(String path) {
     }
     ArenaDelete(&scratch);
     return depth;
-}
-
-struct Server ServerDefaultInit(int port,int backlog){
-    return ServerInit(AF_INET,SOCK_STREAM,0,INADDR_ANY,port,backlog);
 }
 
 String ServerRequestMethod(String request,struct Arena* arena) {
