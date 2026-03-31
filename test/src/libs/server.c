@@ -1,10 +1,44 @@
 #include "server.h"
 
-#define MAXREQUESTSIZE 300000
+#define MAXREQUESTSIZE 10000
 
-#define DEBUG 1
+#define DEBUG 0
+
+struct Arena globalArena;
+Hashmap* defaultHeaders;
+
+String ServerMapToHeaders(Hashmap* map,struct Arena* arena) {
+    MapKeys mapKeys = HashmapKeys(map);
+    struct Arena scratch = ArenaCreate(1024);
+    String headers = StringFrom("",&scratch);
+    for(int i=0;i<mapKeys.size;i++) {
+        char* key = mapKeys.keys[i];
+        headers = StringFormat(&scratch,StringFrom("%S%s:%S\n",&scratch),headers,key,*(String*)HashmapGet(map,key));
+    }
+    headers = StringCpy(headers,arena);
+    ArenaDelete(&scratch);
+    return headers;
+}
+
+void ServerInitDefault() {
+    Hashmap* jsonDefaultHeaders = (Hashmap*)JsonParse(StringFrom(
+"{\
+    \"Content-Type\":\"text/html\",\
+    \"Connection\":\"Closed\"\
+}"
+        ,&globalArena),&globalArena)->ptr;
+    defaultHeaders = ArenaAlloc(&globalArena,sizeof(Hashmap));
+    *defaultHeaders = HashmapNew(sizeof(String),&globalArena);
+    MapKeys jsonkeys = HashmapKeys(jsonDefaultHeaders);
+    for(int i=0;i<jsonkeys.size;i++) {
+        char* key = jsonkeys.keys[i];
+        HashmapSet(defaultHeaders,key,(String*)((JsonElem*)HashmapGet(jsonDefaultHeaders,key))->ptr);
+    }
+}
 
 struct Server ServerInit(int domain,int service,int protocol,u_long interface,int port,int backlog) {
+    //defaultHeaders = (Hashmap*)JsonParse(StringFrom("{\"Content-Type\":\"text/html\",\"Connection\":\"Closed\"}",&globalArena),&globalArena)->ptr;
+    ServerInitDefault();
     struct Server server = {0};
 
     server.domain = domain;
@@ -51,24 +85,43 @@ struct Server ServerInit(int domain,int service,int protocol,u_long interface,in
     return server;
 }
 
-String ServerMakeHeader(int code,String* headers,int headerCount,struct Arena* arena) {
+String ServerMakeHeader(int code,int contentLength,String headers,struct Arena* arena) {
     String header = StringFormat(arena,StringFrom("HTTP/1.1 %d OK\n",arena),code);
-    if (headers) {
-        for(int i=0;i<headerCount;i++) {
-            header = StringConcat(header,headers[i],arena);
-            header = StringConcat(header,StringFrom("\n",arena),arena);
-        }
-        header = StringConcat(header,StringFrom("\n",arena),arena);
-    }else {
-        header = StringConcat(header,StringFrom("Content-Type: text/html\nConnection: Closed\n\n",arena),arena);
+    Hashmap finalmap = HashmapNew(sizeof(String),arena);
+    MapKeys defaultKeys = HashmapKeys(defaultHeaders);
+    for(int i=0;i<defaultKeys.size;i++) {
+        char* key = defaultKeys.keys[i];
+        HashmapSet(&finalmap,key,(String*)HashmapGet(defaultHeaders,key));
     }
+    Hashmap* jsonHeadermap = (Hashmap*)JsonParse(headers,arena)->ptr;
+    if (jsonHeadermap) {
+        MapKeys jsonkeys = HashmapKeys(jsonHeadermap);
+        for(int i=0;i<jsonkeys.size;i++) {
+            char* key = jsonkeys.keys[i];
+            HashmapSet(&finalmap,key,(String*)((JsonElem*)HashmapGet(jsonHeadermap,key))->ptr);
+        }
+    }
+
+    if (contentLength >= 0) {
+        String contentLengths = StringFromInt(contentLength,arena);
+        HashmapSet(&finalmap,"Content-Length",&contentLengths);
+    }
+    
+    header = StringConcat(header,ServerMapToHeaders(&finalmap,arena),arena);
+
+    header = StringConcat(header,StringFrom("\r\n",arena),arena);
     return header;
 }
 
 String ServerGetRequest(int clientSocket,int maxRequestSize,struct Arena* arena) {
     String buffer = StringAlloc(maxRequestSize,arena);
-    recv(clientSocket,buffer.text,maxRequestSize,0);
-    StringResize(&buffer);
+    int len = recv(clientSocket,buffer.text,maxRequestSize,0);
+    buffer.size = len;
+    FILE* fp = fopen("./log.txt","a");
+    fprintf(fp,"\n[HTTP]\n");
+    fprintf(fp,StringToChar(buffer,arena));
+    fprintf(fp,"\n[/HTTP]");
+    fclose(fp);
     return buffer;
 }
 
@@ -151,16 +204,16 @@ String ServerFindContent(String request,struct Arena* arena) {
     struct Arena scratch = ArenaCreate(1024);
     String content;
     int i = StringFind(request,StringFrom("\n\n",&scratch),0);
+    if (i == -1) {
+        i = StringFind(request,StringFrom("\n\r\n",&scratch),0);
+    }
     content = StringSub(request,i,request.size,arena);
     ArenaDelete(&scratch);
     return content;
 }
 
-void ServerRespond(int code,String contentType,String content,struct Arena* arena) {
-    String* headers = ArenaAlloc(arena,sizeof(String)*2);
-    headers[0] = StringConcat(StringFrom("Content-Type:",arena),contentType,arena);
-    headers[1] = StringFrom("Access-Control-Allow-Origin: *",arena);
-    String response = StringConcat(ServerMakeHeader(code,headers,1,arena),content,arena);
+void ServerRespond(int code,String headers,String content,struct Arena* arena) {
+    String response = StringConcat(ServerMakeHeader(code,content.size,headers,arena),content,arena);
     printf("%s",StringToChar(response,arena));
 }
 
@@ -186,11 +239,11 @@ String ServerPathExtension(String path,struct Arena* arena) {
 }
 
 String ServerRequestContent(String request,struct Arena* arena) {
-    int icontent = StringFind(request,StringFrom("\n\r\n",arena),0);
+    int icontent = StringFind(request,StringFrom("\n\n",arena),0);
     printf("icontent: %d %d\n",icontent,request.size);
     if (icontent < 0)
         return StringFrom("",arena);
-    return StringSub(request,icontent+3,request.size,arena);
+    return StringSub(request,icontent+2,request.size,arena);
 }
 
 void ServerRun(struct Server* server) {
@@ -203,12 +256,17 @@ void ServerRun(struct Server* server) {
 
         printf("== awaiting connection ==\n");
         int clientSocket = ServerAwaitConnection(server);
-
+        
+        struct timeval stop, start;
+        gettimeofday(&start, NULL);
+        /*
         struct sockaddr_in addr = ServerGetSenderIp(clientSocket);
         printf("/////// ip:%s:%d ///////\n\n",inet_ntoa(addr.sin_addr),addr.sin_port);
-
+        */
         String request = ServerGetRequest(clientSocket,MAXREQUESTSIZE,&sarena);
+        if (request.size > 1) {
         printf("%s\n\n",StringToChar(request,&sarena));
+
         if(server->onRequest)
             server->onRequest(server,request);
 
@@ -225,6 +283,16 @@ void ServerRun(struct Server* server) {
         printf("extension: %s\n",StringToChar(extension,&sarena));
 
         String content = ServerRequestContent(request,&sarena);
+        if(content.size <= 0) {
+            content = StringFrom("",&sarena);
+        }
+
+        FILE* fpl = fopen("./log.txt","a");
+        fprintf(fpl,"\n[CONTENT]");
+        fprintf(fpl,StringToChar(content,&sarena));
+        fprintf(fpl,"[/CONTENT]");
+        fclose(fpl);
+        
         printf("content: %s\n",StringToChar(content,&sarena));
 
         String response;
@@ -232,7 +300,8 @@ void ServerRun(struct Server* server) {
         ServerSocketWriteTo(clientSocket,StringFrom("",&sarena),&sarena);
         if (fp == NULL || ServerPathDepth(path) < 1) {
             printf("incorrect path\n");
-            response = StringConcat(ServerMakeHeader(404,NULL,0,&sarena),StringFrom("<html><body> <h1>404</h1> <h2>no such file</h2> </body></html>",&sarena),&sarena);
+            String content = StringFrom("<html><body> <h1>404</h1> <h2>no such file</h2> </body></html>",&sarena);
+            response = StringConcat(ServerMakeHeader(404,content.size,StringFrom("{}",&sarena),&sarena),content,&sarena);
             ServerSocketWriteTo(clientSocket,response,&sarena);
         }else {
             if(StringEq(extension,StringFrom("c",&sarena))) {
@@ -257,6 +326,11 @@ void ServerRun(struct Server* server) {
                 if(fp) {
                     fclose(fp);
                     char* command = StringToChar(StringFormat(&sarena,StringFrom("cd /myserver && chmod +x %s && %s %S '%S' '%S' ",&sarena),binpath,binpath,method,rawPath,content),&sarena);
+                    FILE* fpl = fopen("./log.txt","a");
+                    fprintf(fpl,"\n[COMMAND]");
+                    fprintf(fpl,command);
+                    fprintf(fpl,"[/COMMAND]");
+                    fclose(fpl);
                     printf("command: %s\n",command);
                     FILE* responsefp = popen(command,"r");
                     if (responsefp) {
@@ -267,12 +341,14 @@ void ServerRun(struct Server* server) {
                         printf("\n\n//response://\n%s\n\n",StringToChar(response,&sarena));
                         ServerSocketWriteTo(clientSocket,response,&sarena);   
                     }else {
-                        response = StringConcat(ServerMakeHeader(500,NULL,0,&sarena),StringFrom("<html><body> <h1>500</h1> <h2>server error</h2> </body></html>",&sarena),&sarena);
+                        String content = StringFrom("<html><body> <h1>500</h1> <h2>server error</h2> </body></html>",&sarena);
+                        response = StringConcat(ServerMakeHeader(500,content.size,StringFrom("{}",&sarena),&sarena),content,&sarena);
                         ServerSocketWriteTo(clientSocket,response,&sarena);
                     }
                 }else {
                     printf("error in file compilation\n");
-                    response = StringConcat(ServerMakeHeader(500,NULL,0,&sarena),StringFrom("<html><body> <h1>500</h1> <h2>server error</h2> </body></html>",&sarena),&sarena);
+                    String content = StringFrom("<html><body> <h1>500</h1> <h2>server error</h2> </body></html>",&sarena);
+                    response = StringConcat(ServerMakeHeader(500,content.size,StringFrom("{}",&sarena),&sarena),content,&sarena);
                     ServerSocketWriteTo(clientSocket,response,&sarena);
                 }
             }else {
@@ -282,8 +358,8 @@ void ServerRun(struct Server* server) {
                 String content = StringAlloc(size,&sarena);
                 for(int i=0;i<size;i++) 
                     content.text[i] = fgetc(fp);
-                String contentType = StringConcat(StringFrom("Content-Type: text/",&sarena),extension,&sarena);
-                response = StringConcat(ServerMakeHeader(200,&contentType,1,&sarena),content,&sarena);
+                String contentType = StringConcat(StringFrom("text/",&sarena),extension,&sarena);
+                response = StringConcat(ServerMakeHeader(200,content.size,StringFormat(&sarena,StringFrom("{\"Content-Type\":\"%S\"}",&sarena),contentType),&sarena),content,&sarena);
                 printf("\n\n//response://\n%s\n\n",StringToChar(response,&sarena));
                 ServerSocketWriteTo(clientSocket,response,&sarena);
             }
@@ -294,7 +370,14 @@ void ServerRun(struct Server* server) {
         
         if (server->onPOST && StringEq(method,StringFrom("POST",&sarena)))
             server->onPOST(server,path);
-        
+    }
+        gettimeofday(&stop, NULL);
+        unsigned long dt = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec;
+        FILE* fpl = fopen("./log.txt","a");
+        fprintf(fpl,"\n[TIME]");
+        fprintf(fpl,StringToChar(StringFromLong((long)dt,&sarena),&sarena));
+        fprintf(fpl," us[/TIME]");
+        fclose(fpl);
         ServerSocketClose(clientSocket);
         ArenaDelete(&sarena);
     }

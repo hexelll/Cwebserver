@@ -1,23 +1,43 @@
 #include "arena.c"
 
+/*
+represents a chain of characters
+*/
 typedef struct {
     char* text;
     int size;
 }String;
 
+/*
+represents an array of String
+*/
 typedef struct{
     String* ptr;
     int size;
 }StringArr;
 
+/*
+represents a part of a String, mostly unused for now but should be used more as it saves on memory
+*/
 typedef struct {
     char* text;
     int start;
     int end;
 }Slice;
 
+/*
+creates the default String arena
+*/
+struct Arena StringInitArena();
+
+/*
+creates a String from a char*
+*/
 String StringFrom(char* str,struct Arena* arena);
 
+/*
+creates a String from a char* using the default String arena, you should do StringInitArena() at some point before using this function
+*/
 String Str(char*);
 
 char* StringToChar(String string,struct Arena* arena);

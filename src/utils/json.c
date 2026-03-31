@@ -318,6 +318,7 @@ Hashmap* JsonParseObject(String str,struct Arena* arena,int start,int* icurrent)
 }
 
 JsonElem* JsonParse(String str,struct Arena* arena) {
+    if(str.size == 0) return NULL;
     Hashmap* map = ArenaAlloc(arena,sizeof(Hashmap));
     *map = HashmapNew(sizeof(JsonElem),arena);
     int icurrent=0;

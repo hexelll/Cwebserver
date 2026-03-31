@@ -2,6 +2,7 @@
 #include "/myserver/libs/server.c"
 
 int main(int argc,char** argv) {
+    ServerInitDefault();
     struct Arena sarena = ArenaCreate(1024);
 
     Hashmap map = ServerParseRequest(argv,&sarena);
@@ -13,6 +14,6 @@ int main(int argc,char** argv) {
         text = StringConcat(text,StringFormat(&sarena,StringFrom("\n<li>%s=%S</li>",&sarena),key,value),&sarena);
     }
     text = StringConcat(text,StringFrom("</ul>",&sarena),&sarena);
-    ServerRespond(200,StringFrom("text/html",&sarena),text,&sarena);
+    ServerRespond(200,StringFrom("{\"Content-Type\":\"text/html\"}",&sarena),text,&sarena);
     ArenaDelete(&sarena);
 }

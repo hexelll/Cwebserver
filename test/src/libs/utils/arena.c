@@ -2,9 +2,6 @@
 #define MYARENA
 
 #include "arena.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #define AUTO_SIZE_UP 1
 

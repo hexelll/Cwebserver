@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
 
 struct Server{
     int domain;
@@ -40,10 +41,13 @@ runs the server, it will loop forever
 void ServerRun(struct Server* server);
 
 /*
-creates a http header from a code and an array of Strings, the code is the return code of the request (200,404,500,...) and 
-the headers must be of the form Header-Name:headerValue, exemple: Content-Type:text/html
+creates a http header
+code is the return code of the request (200,404,500,...) and 
+contentLength is the length of the content
+headers is a json containing headers for the http request
+the headers must be of the form "Header-Name":"headerValue", exemple: "Content-Type":"text/html"
 */
-String ServerMakeHeader(int code,String* headers,int headerCount,struct Arena* arena);
+String ServerMakeHeader(int code,int contentLength,String headers,struct Arena* arena);
 
 /*
 awaits an http request, returns the client socket that is needed to get the request content and respond to the request
@@ -63,7 +67,7 @@ Hashmap ServerParseRequest(char** argv,struct Arena* arena);
 /*
 used inside of a c page to respond to a request
 */
-void ServerRespond(int code,String contentType,String content,struct Arena* arena);
+void ServerRespond(int code,String headers,String content,struct Arena* arena);
 
 /*
 used to get the ip that sent the request, not to be confused with the clients ip, this will most likely be a router
